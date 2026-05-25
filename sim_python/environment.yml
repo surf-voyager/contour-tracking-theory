@@ -1,0 +1,17 @@
+name: sci
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy=1.26
+  - scipy=1.15
+  - pandas=2.3
+  - pyarrow=21
+  - matplotlib=3.10
+  - pyyaml=6.0
+  - pytest=9.0
+  - tqdm=4.67
+  - joblib=1.5
+# Reproducibility pin as of 2026-05-23.
+# Update via:  conda env update -n sci -f sim_python/environment.yml

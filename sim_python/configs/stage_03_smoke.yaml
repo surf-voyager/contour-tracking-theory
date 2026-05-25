@@ -1,0 +1,64 @@
+# Stage 03 — N=100 LHS smoke MC.
+#
+# LHS axes:
+#   - kappa_max  : 0.01 – 1.0   m^-1   (log)   — 1 m tight turn to 100 m gentle arc
+#   - v_star     : 0.2  – 2.0   m/s    (linear) — typical AUV cruise
+#   - f_s        : 0.5  – 20    Hz     (log)   — mech-scan to MBES
+#   - tau_d      : 0.05 – 0.5   s      (linear) — image-sonar processing delay
+#
+# The other axes are fixed at their nominal mid-values:
+#   - kappa_dot_max (m^-2):  geometric mean of [1e-3, 1e-1]  = 0.01
+#   - u_gate (m/s):          0.3   (mid of {0.2, 0.3, 0.4, 0.5})
+#   - w_FOV (rad):           π/2   (90°, mid of {30°,60°,90°,120°,360°})
+#   - sigma_eta (m):         geometric mean of [0.01, 0.5]   ≈ 0.07
+#   - bar_Vc (m/s):          0.2   (mid of {0, 0.1, 0.3, 0.6})
+#
+# Per-run simulation length T = 300 s.  dt = 0.1 s — coarse enough to
+# keep the N=100 smoke under ~5 min wall-clock, fine enough that the
+# LOS+κ̂ closed loop converges (verified in the closed-loop smoke).
+#
+# Engine label = "py" (normative schema).
+
+engine: py
+stage: 03
+run_tag: smoke_n100
+
+N: 100
+seed: 42
+
+axes:
+  kappa_max: [0.01, 1.0,   "log"]
+  v_star:    [0.2,  2.0,   "linear"]
+  f_s:       [0.5,  20.0,  "log"]
+  tau_d:     [0.05, 0.5,   "linear"]
+
+fixed:
+  kappa_dot_max: 0.01    # m^-2 (geo-mean of [1e-3, 1e-1])
+  u_gate: 0.3            # m/s
+  w_FOV: 1.5708          # rad (π/2 = 90°)
+  sigma_eta: 0.07        # m (geo-mean of [0.01, 0.5])
+  bar_Vc: 0.2            # m/s
+
+sim:
+  T_end: 300.0           # s — per-run simulation horizon
+  dt: 0.1                # s
+  d_star: 2.0            # m  (standoff)
+  d_min: 0.5             # m  (collision threshold)
+  side: L                # follow on LEFT of wall tangent
+  ds: 0.1                # m  (wall polyline resolution)
+
+hull:
+  u_max: 2.0
+  r_max: 0.5
+  dot_r_max: 1.0
+  u_gate: 0.3
+  tau_u: 0.5
+  zeta_gate: 2.0
+
+los:
+  Delta: 2.0
+  K_p: 0.4
+  K_ff: 1.0
+  K_theta: 0.5           # heading damping (avoids the closed-loop limit cycle)
+  d_star: 2.0
+  style: sin

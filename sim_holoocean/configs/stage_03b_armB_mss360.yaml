@@ -1,0 +1,71 @@
+# sim_holoocean/configs/stage_03b_armB_mss360.yaml
+# Arm B — MSS 360-deg SCANNING sonar, geometric-RIGIDITY contrast.
+#
+# SAME spawn / SAME corner approach / SAME controller gains as Arm A. The only
+# difference: a single-beam MSS sonar (models/mss_sonar.py) is steered over the
+# FULL 360-deg circle each sweep. Because the wall is ALWAYS somewhere within the
+# 360-deg coverage, the visibility predicate vis_t == 1 throughout -> Lost-G NEVER
+# triggers (geometric rigidity: the 360-degree scanning sonar keeps the wall visible
+# on every sweep). This is the photorealistic realization of the scanning(360) vs
+# forward(narrow) dual-sonar contrast.
+#
+# Simplification: the CONTROL loop is still driven by the same forward channel (so
+# both arms fly the identical trajectory and the contrast is purely in the
+# visibility predicate). vis_t for the FSM is computed from the MSS 360-deg
+# coverage, NOT the forward fan. The forward sonar here is kept at the same azimuth
+# as arm A only so the two arms share an identical scenario hash basis; it does NOT
+# gate visibility in arm B.
+#
+# arm: B selects the MSS-coverage visibility path in the driver.
+
+arm: B
+world: PierHarbor
+ticks_per_sec: 30
+duration_s: 120.0
+smoke_duration_s: 90.0
+
+spawn_location: [486.0, -632.0, -12.0]
+spawn_rotation: [0.0, 0.0, 180.0]
+
+frame_dump_every_s: 6.0
+
+sonar:                      # forward channel: drives control (identical to arm A)
+  sensor_name: ForwardSonar
+  hz: 5
+  azimuth_deg: 50.0         # identical to arm A so both arms fly the SAME trajectory
+  range_min: 1.0
+  range_max: 40.0
+  range_bins: 512
+  azimuth_bins: 256
+  intensity_thresh: 0.2
+
+mss:                        # MSS single-beam scanning sonar (vis_t source for arm B)
+  sensor_name: MSS
+  hz: 5                     # one steered beam per sonar tick
+  step_deg: 12.0            # 12 deg/beam -> 30 beams per 360 deg sweep
+  start_deg: -180.0
+  end_deg: 180.0
+  scan_axis: roll           # TorpedoAUV SonarSocket: world-yaw scan -> socket ROLL
+  range_bins: 256
+
+controller:                 # IDENTICAL gains to arm A (same orbiting trajectory)
+  d_star: 8.0
+  d_min: 3.0
+  u_max: 1.0
+  thrust_rpm: 450.0
+  Delta: 8.0
+  K_p: 0.30
+  K_ff: 0.0
+  K_theta: 0.0
+  los_style: sin
+  k_rudder: 4.0
+  delta_max_deg: 15.0
+  window_L: 8
+  s_bar: 0.5
+  sigma_eta: 0.10
+  u_min: 0.3
+  kappa_dot_max: 1.0e-2
+  warmup_s: 2.0
+
+acceptance:
+  min_valid_frame_frac: 0.05

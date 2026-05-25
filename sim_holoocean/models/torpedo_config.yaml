@@ -1,0 +1,82 @@
+# sim_holoocean/models/torpedo_config.yaml
+# Layer-2 (HoloOcean 2.3.0) torpedo hull config.
+#
+# Maps the paper's "REMUS-100-like" hull abstraction onto HoloOcean's TorpedoAUV
+# agent (the paper's vehicle/actuation parameters).
+#
+# ── ADJUSTABLE vs ENGINE-FIXED ────────────────────────────────────────────────
+# HoloOcean's TorpedoAUV has 3 control schemes. Hull mass/inertia/drag are handled
+# differently depending on which one is used:
+#
+#   * Thruster-force / PD-controller schemes (control_scheme 0/1):
+#       mass, inertia, thruster geometry are C++ constants in the engine
+#       (FixedWing.h / TorpedoAUV.h). The HoloOcean docs note that editing them in
+#       Python will not change the vehicle behavior.  → ENGINE-FIXED.
+#
+#   * Custom-Dynamics scheme + Fossen "torpedo" model (fossen_model: "torpedo"):
+#       mass / length / diam / T_surge / T_sway / T_yaw / Cd / r_bg / r_bb ARE
+#       configurable from the scenario `dynamics` block via
+#       fossen_dynamics/torpedo.py::configure_torpedo_from_scenario().
+#       Defaults are tuned to REMUS100 (mass 31.03 kg, length 1.6 m, diam 0.19 m),
+#       which matches the paper's "REMUS-100-like" archetype.  → ADJUSTABLE.
+#
+# The static-target sonar check does NOT move the vehicle, so torpedo *dynamics*
+# fidelity is not exercised there — only that the agent + dynamics block loads with
+# no missing keys. The Fossen `dynamics` block below is what gets injected into the
+# scenario for the closed-loop tracking demo when the vehicle actually maneuvers.
+#
+# Paper vehicle parameter → Fossen-torpedo key crosswalk:
+#   `Hull mass m` (30 kg)        -> dynamics.mass     (kg)
+#   `Hull inertia I_z` (8 kg·m²) -> (no direct scalar key; Fossen derives the
+#                                    inertia tensor from mass+length+diam via a
+#                                    spheroid model. I_z is therefore IMPLICIT, not a
+#                                    free scalar. Documented deviation.)
+#   `tau_u` (surge tc 0.5 s)     -> dynamics.T_surge  (s)  [note: HO default 20 s]
+#   `tau_r` (yaw tc 0.3 s)       -> dynamics.T_yaw    (s)  [note: HO default 1 s]
+#   `Hull drag X_u,X_u|u|`       -> dynamics.Cd  (single drag coeff; Fossen uses
+#                                    lift/drag + crossflow, not two separate
+#                                    X_u/X_u|u| terms. Documented deviation.)
+#   `delta_max` (25°)            -> actuator.deltaMax_fin_deg
+#   `dot_delta_max` (30°/s)      -> actuator.fin_speed_max (rad/s)
+#   `r_max` (0.5 rad/s)          -> autopilot.heading.r_max
+#
+# NOT modeled by Fossen-torpedo (no key): zeta (rudder-disabled yaw damping),
+# dot_r_max (yaw accel limit). These are Layer-1-only abstractions; documented as
+# deviations — Layer-2 uses HoloOcean's own actuator/autopilot dynamics.
+
+agent_name: auv0
+agent_type: TorpedoAUV
+
+# ── VALIDATED BASELINE ────────────────────────────────────────────────────────
+# The closed-loop demo uses the validated torpedo-AUV baseline, empirically
+# characterised via speed / turn / pitch / coast sweeps:
+#   control_scheme=1, fossen_model="torpedo", control_mode="manualControl"
+#   actuator: CL_delta=3.0 (6× Fossen default 0.5), deltaMax_fin_deg=15 (Fossen default)
+#   dynamics: r_bg=[0,0,0] (CG at geometric centre → MRB no off-diagonal),
+#             r_bb=[0,0,-0.04] (CB raised 4 cm → GM=0.04 m)
+control_scheme: 1
+fossen_model: torpedo
+control_mode: manualControl
+
+# Fossen custom-dynamics block (validated baseline values). Un-overridden keys fall
+# back to the REMUS100 defaults in HoloOcean's fossen_dynamics/torpedo.py.
+dynamics:
+  r_bg: [0.0, 0.0,  0.00]   # CG at geometric centre (baseline)
+  r_bb: [0.0, 0.0, -0.04]   # CB +4 cm → GM = 0.04 m (baseline)
+  # mass/length/diam/T_*/Cd: REMUS100 defaults (mass 31.03 kg, L 1.6 m, D 0.19 m).
+  # The baseline relies on the validated REMUS100 defaults + the r_bg/r_bb tuning
+  # above. I_z is still spheroid-derived (not a free scalar).
+
+actuator:
+  CL_delta: 3.0            # baseline: 6× Fossen default (fin lift-curve slope)
+  deltaMax_fin_deg: 15     # baseline: ±15° all fins (Fossen default)
+
+autopilot:
+  heading:
+    r_max: 0.5             # max yaw rate (paper r_max)
+
+# Initial spawn — for the geometry-rich worlds (PierHarbor/Dam), the tracking
+# scenario overrides this to a pose near the harbor/dam wall (NOT the OpenWater
+# coords below, which are the static-target placement).
+location: [0.0, 0.0, -5.0]
+rotation: [0.0, 0.0, 0.0]

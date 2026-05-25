@@ -1,0 +1,17 @@
+# Python build artefacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Simulation outputs (regenerable from configs + seeds)
+results/
+*.log
+
+# OS / editor junk
+.DS_Store
+*.swp

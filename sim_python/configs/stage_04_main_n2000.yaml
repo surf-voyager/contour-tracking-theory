@@ -1,0 +1,68 @@
+# Stage 04 — N=2000 main MC.
+#
+# Run after stage_04_main_smoke_n500.yaml validates the pipeline.
+#
+# N=2000 × M=3 noise realisations × T=120 s sim wall.
+# Wall-clock projection (16 cores, joblib n_jobs=8):
+#   per-run ~ 120 s sim × ~5 ms/step (incl. FSM) = 0.6 s
+#   2000 × 3 × 0.6 s / 8 ≈ 450 s ≈ 8 min
+#   Headroom for joblib overhead + parquet writes.
+#
+# Why M=3 not M=10:
+# - Three noise realisations per config are enough to detect the
+#   within-cell variance for the phenomena that depend on it
+#   (lost_freq for #3, p_r for #5).
+#
+# The five-axis sweep mirrors the smoke config; M=3 is implemented by
+# running the same config three times with noise_seed in {0,1,2} and
+# concatenating (the dispatcher runs one (config, noise_seed) per row).
+
+engine: py
+stage: 04
+run_tag: main_n2000
+
+N: 2000
+seed: 42
+
+axes:
+  kappa_max: [0.01, 1.0,   "log"]
+  v_star:    [0.2,  2.0,   "linear"]
+  f_s:       [0.5,  20.0,  "log"]
+  tau_d:     [0.05, 0.5,   "linear"]
+  w_FOV:     [0.52, 6.28,  "linear"]
+
+fixed:
+  kappa_dot_max: 0.01
+  u_gate: 0.3
+  sigma_eta: 0.07
+  bar_Vc: 0.1
+
+sim:
+  T_end: 120.0
+  dt: 0.1
+  d_star: 2.0
+  d_min: 0.5
+  side: L
+  ds: 0.1
+  noise_seed: 0           # the driver overrides for M>1
+
+hull:
+  u_max: 2.0
+  r_max: 0.5
+  dot_r_max: 1.0
+  u_gate: 0.3
+  tau_u: 0.5
+  zeta_gate: 2.0
+
+los:
+  Delta: 2.0
+  K_p: 0.4
+  K_ff: 1.0
+  K_theta: 0.5
+  d_star: 2.0
+  style: sin
+
+# Number of noise realisations per LHS config (M).  The driver script
+# honours this by running the dispatcher M times with noise_seed in
+# {0, ..., M-1} and concatenating.
+M_realisations: 3

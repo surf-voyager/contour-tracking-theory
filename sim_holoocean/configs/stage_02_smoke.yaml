@@ -1,0 +1,61 @@
+# sim_holoocean/configs/stage_02_smoke.yaml
+# Static-target sonar range-fidelity check — run config.
+#
+# Drives sim_holoocean/scenarios/static_target_smoke.py:
+#   - load OpenWater world with a TorpedoAUV (auv0) carrying BOTH sonar archetypes
+#   - for each test distance d, place the agent so the seafloor sits d metres below
+#     (look-down), tick to settle, then collect n_samples sonar frames
+#   - extract per-frame peak-intensity range, write mean/std to parquet (engine="ho")
+#   - compare empirical range mean vs ground-truth d and empirical std vs the
+#     nominal sigma_eta(d) model.
+#
+# Nominal sigma_eta models (range-noise std, metres):
+#   scanning: 0.02 + 0.005*d
+#   forward : 0.05 + 0.01*d
+
+world: OpenWater
+package_name: Ocean       # required when passing a custom scenario_cfg to holoocean.make
+ticks_per_sec: 30
+# OpenWater has CACHED octrees only for octree_min=0.02 / octree_max=5.0 — match them
+# so the sonar does not regenerate octrees from scratch (slow + incomplete).
+octree_min: 0.02
+octree_max: 5.0
+
+# Sonar model files (loaded + merged into the scenario by the smoke driver).
+scanning_sonar_model: sim_holoocean/models/scanning_sonar.yaml
+forward_sonar_model:  sim_holoocean/models/forward_sonar.yaml
+torpedo_model:        sim_holoocean/models/torpedo_config.yaml
+
+# Open-water spawn (matches shipped OpenWater-TorpedoProfilingSonar scenario:
+# deep, away from seafloor/walls so the only sonar return is our target).
+agent_spawn:
+  location: [35.0, -40.5, -292.5]
+  rotation: [0.0, 0.0, 0.0]        # yaw 0 -> +x world is "forward"/dead-ahead
+
+# Static target: a box prop (spawn_prop "box"), placed d metres ahead of the agent
+# along +x. 2 m cube gives a strong, unambiguous sonar return for range extraction.
+target:
+  prop_type: box
+  scale: [2.0, 2.0, 2.0]
+  material: steel                  # high acoustic reflectivity
+  sim_physics: false               # static (no gravity/motion)
+
+# Test distances (ground-truth range, metres). Evaluated at {2,5,10}.
+distances_m: [2.0, 5.0, 10.0]
+
+# An extra off-grid probe distance to verify the response is consistent.
+probe_distance_m: 3.7
+
+# Sampling. NOTE: the driver makes a FRESH env per (distance x sonar) because the
+# sonar octree does not regenerate cleanly after teleport.
+# 4 distances x 2 sonars = 8 env launches; keep n_samples modest for runtime.
+n_samples: 40          # sonar frames collected per distance (mean/std estimation)
+settle_ticks: 90       # ticks to let octree build at the look-down pose before sampling
+sample_stride_ticks: 3 # ticks between collected frames (decorrelate returns)
+
+# Acceptance thresholds for the range-fidelity check.
+acceptance:
+  mean_range_err_frac_max: 0.50    # |mean_range - d| / d  must be < 0.50 at each d
+  sigma_factor_max: 2.0            # empirical_std vs nominal sigma_eta within factor 2
+
+out_subdir: stage_02_smoke

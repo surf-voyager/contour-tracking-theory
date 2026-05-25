@@ -1,0 +1,37 @@
+# sim_holoocean/.gitignore — layer-local, supplements top-level .gitignore
+
+# Active run outputs (large parquet); preserved only via archive/
+results/*
+!results/.gitkeep
+
+# ─────────────────────────────────────────────────────────────
+# Archive policy: the only files preserved in git from
+# sim_holoocean/archive/ are the per-run analysis_report.md
+# (human-readable summary) and the batch-level config.yaml
+# (the reproducibility seed). Everything else under archive/ —
+# per-run subdirs, parquet, json, log, csv, png, pdf, npz — is
+# local-only.
+# ─────────────────────────────────────────────────────────────
+
+# Ignore EVERYTHING under archive/ by default
+archive/**
+
+# Then re-include only the intended-tracked file types:
+!archive/
+!archive/.gitkeep
+!archive/**/
+!archive/**/analysis_report.md
+# Batch-level config.yaml lives directly under the date_runtag dir
+# (not under run_<hash>/), so the glob below catches only those:
+!archive/*/*/config.yaml
+
+# Run logs
+logs/*
+!logs/.gitkeep
+
+# Python build (also covered by top-level, but explicit here)
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/

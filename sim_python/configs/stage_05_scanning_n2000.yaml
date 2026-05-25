@@ -1,0 +1,72 @@
+# Stage 05 — Scanning-sonar batch (360° FOV, low f_s, low noise)
+#
+# Configuration:
+#   - Fix:  w_FOV = 2π rad (360°), f_s = 1.5 Hz, σ_η(d) = 0.02 + 0.005·d  m
+#   - Sweep (5 axes): κ_max, κ'_max, v*, τ_d, V̄_c
+#   - N=2000 × M=3 noise realisations
+#   - Expected: Lost-G ≈ 0 (geometric rigidity)
+#
+# A scanning sonar's mechanical revolution rate dominates f_s; the AUV
+# effectively sees the entire wall horizon at all times, so the
+# wall-tangent never exits the FOV cone ⇒ vis_t ≡ 1 ⇒ the Lost-G
+# trigger frequency stays below ~1 % per run.
+#
+# σ_η(d) is range-dependent (nominal sensor model):
+#   σ_η_a = 0.02 m  intercept (clean water, no shadows)
+#   σ_η_b = 0.005   coefficient (mild divergent-beam degradation)
+
+engine: py
+stage: 05
+run_tag: scanning_n2000
+seed: 44   # scanning batch
+
+N: 2000
+
+axes:
+  kappa_max:     [0.01,  1.0,  "log"]
+  kappa_dot_max: [1.0e-3, 1.0e-1, "log"]   # κ'_max swept for T*_G
+  v_star:        [0.2,   2.0,  "linear"]
+  tau_d:         [0.05,  0.5,  "linear"]
+  bar_Vc:        [0.0,   0.3,  "linear"]
+
+fixed:
+  # Scanning fingerprint
+  w_FOV: 6.2832       # 2π rad (360°)
+  f_s: 1.5            # Hz — slow scan rev
+  sigma_eta_a: 0.02   # m  intercept of σ_η(d)
+  sigma_eta_b: 0.005  # slope of σ_η(d) [m / m]
+  # Misc
+  u_gate: 0.3
+  # legacy scalar sigma_eta kept for backwards-compat callers that
+  # don't yet understand sigma_eta_a/b — set to a typical d_star
+  # evaluation: 0.02 + 0.005 * 2 = 0.030 m
+  sigma_eta: 0.030
+
+sim:
+  T_end: 120.0
+  dt: 0.1
+  d_star: 2.0
+  d_min: 0.5
+  side: L
+  ds: 0.1
+  noise_seed: 0   # driver overrides per noise realisation
+
+hull:
+  u_max: 2.0
+  r_max: 0.5
+  dot_r_max: 1.0
+  u_gate: 0.3
+  tau_u: 0.5
+  zeta_gate: 2.0
+
+los:
+  Delta: 2.0
+  K_p: 0.4
+  K_ff: 1.0
+  K_theta: 0.5
+  d_star: 2.0
+  style: sin
+
+# Number of noise realisations per LHS config; the driver loops
+# noise_seed in {0,1,2}.  N=2000 × M=3 = 6000 runs total.
+M_realisations: 3

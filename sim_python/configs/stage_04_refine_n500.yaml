@@ -1,0 +1,66 @@
+# Stage 04 — N=500 boundary refine.
+#
+# Drawn around the (C1)+(C2) boundary identified in the main batch
+# results, as an independent refine batch.  We use the same axes; the
+# adaptive sampler narrows the ranges around the prior boundary
+# residual window in mc.sampler.adaptive_boundary_refine.  The driver
+# script implements this as:
+#
+#   1. read main batch _summary.parquet
+#   2. compute |trackable_rate - 0.5| per config bin
+#   3. perturb the borderline configs by perturb_frac=0.1
+#   4. dispatch
+#
+# A distinct seed (43 vs the main batch's 42) gives independent samples.
+
+engine: py
+stage: 04
+run_tag: refine_n500
+
+N: 500
+seed: 43
+
+# We re-use the same axis ranges (adaptive_boundary_refine in the
+# refine driver script narrows them); duplicated here for transparency.
+axes:
+  kappa_max: [0.01, 1.0,   "log"]
+  v_star:    [0.2,  2.0,   "linear"]
+  f_s:       [0.5,  20.0,  "log"]
+  tau_d:     [0.05, 0.5,   "linear"]
+  w_FOV:     [0.52, 6.28,  "linear"]
+
+fixed:
+  kappa_dot_max: 0.01
+  u_gate: 0.3
+  sigma_eta: 0.07
+  bar_Vc: 0.1
+
+sim:
+  T_end: 60.0
+  dt: 0.1
+  d_star: 2.0
+  d_min: 0.5
+  side: L
+  ds: 0.1
+  noise_seed: 0
+
+hull:
+  u_max: 2.0
+  r_max: 0.5
+  dot_r_max: 1.0
+  u_gate: 0.3
+  tau_u: 0.5
+  zeta_gate: 2.0
+
+los:
+  Delta: 2.0
+  K_p: 0.4
+  K_ff: 1.0
+  K_theta: 0.5
+  d_star: 2.0
+  style: sin
+
+# Path to the main-batch _summary.parquet whose boundary cells we
+# perturb around.  The refine driver script reads this; the dispatcher
+# itself ignores it.
+refine_source: sim_python/archive/stage_04_full_mc/LATEST/main/_summary.parquet

@@ -1,0 +1,49 @@
+# sim_holoocean/models/scanning_sonar.yaml
+# Layer-2 (HoloOcean 2.3.0) "scanning sonar" archetype.
+#
+# Paper parameters (Sensing — scanning sonar):
+#   f_s = 1.5 Hz, w_FOV = 360 deg (6.2832 rad, mechanical revolution),
+#   sigma_eta(d) = 0.02 + 0.005*d  (m), R_FOV = 50 m.
+#
+# ── MAPPING (scanning -> HoloOcean ProfilingSonar) ───────────────────────────
+# HoloOcean has NO native 360-deg mechanical scanning sonar. The closest multibeam
+# sensor is ProfilingSonar (a subclass of ImagingSonar): wide azimuth fan, thin
+# elevation (Elevation default 1 deg), long range. We use it as the "scanning"
+# archetype with the WIDEST azimuth the engine accepts.
+#
+# *** AZIMUTH CAP (documented deviation) ***
+# HoloOcean's sonar azimuth is a single forward-looking fan; the shipped
+# OpenWater-TorpedoProfilingSonar scenario uses Azimuth=120 deg. The engine
+# computes a (RangeBins x AzimuthBins) intensity image over a forward fan; it does
+# NOT model a full 360-deg mechanical sweep within one tick. We request a wide
+# azimuth (270 deg) and the driver records the ACTUAL azimuth the engine honors.
+# The paper's w_FOV=360 deg is therefore approximated, NOT matched here — the full
+# 360-deg sweep is instead reconstructed by steering a single narrow beam (see
+# models/mss_sonar.py). For the static range-fidelity test the target is placed
+# dead-ahead (within the fan), so the azimuth cap does not affect the range-error
+# measurement; it only affects the w_FOV mapping, which is recorded as a deviation.
+#
+# ── NOISE MAPPING (sigma_eta -> HoloOcean) ───────────────────────────────────
+# The paper's sigma_eta(d) is a RANGE-measurement std that grows linearly with d.
+# HoloOcean's nearest knob is `RangeSigma`: additive noise std (drawn from an
+# exponential distribution) added to the range measurements. It is a SINGLE scalar
+# (range-INDEPENDENT) — HoloOcean does not expose a distance-dependent range-noise
+# slope. We seed it at the paper value at the mid test distance d=5 m:
+# sigma_eta(5) = 0.02 + 0.005*5 = 0.045 m. The range-fidelity check then measures
+# the empirical std at d in {2,5,10} m and compares it to the nominal model.
+# (AddSigma/MultSigma act on intensity, not range, so they are NOT the sigma_eta
+# analog and are left at scenario defaults.)
+
+sensor_type: ProfilingSonar
+socket: SonarSocket
+Hz: 1.5                  # paper f_s (scanning) = 1.5 Hz
+configuration:
+  RangeMin: 0.5          # m; below smallest test distance (2 m)
+  RangeMax: 60.0         # m; matches shipped OpenWater-TorpedoProfilingSonar (>= R_FOV 50 m)
+  RangeBins: 512         # range resolution = (60-0.5)/512 ~= 0.116 m/bin
+  Azimuth: 270           # widest forward fan we request (paper 360 deg capped — see header)
+  AzimuthBins: 512
+  Elevation: 1           # ProfilingSonar default thin-fan elevation (deg)
+  InitOctreeRange: 70    # match shipped scenario; build octree beyond RangeMax at startup
+  RangeSigma: 0.045      # sigma_eta(d=5 m) seed = 0.02 + 0.005*5 (range-independent in HO)
+  ShowWarning: false     # headless: suppress on-screen sonar-compute warning

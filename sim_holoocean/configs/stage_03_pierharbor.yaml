@@ -1,0 +1,64 @@
+# sim_holoocean/configs/stage_03_pierharbor.yaml
+# Closed-loop contour-tracking demo config.
+#
+# World + spawn: PierHarbor at the VALIDATED sonar-visible spawn [486,-632,-12]
+# (shipped PierHarbor-{Torpedo,HoveringImagingSonar} both spawn auv0 here; the
+# HoveringImagingSonar variant shows an ImagingSonar at this pose imaging a real
+# harbor wall — strong wall returns, unlike the empty OpenWater world). yaw 150 deg
+# orients the forward sonar fan at the wall (between shipped Torpedo yaw=130 and
+# Sonar yaw=180).
+#
+# Sonar: forward ImagingSonar, config mirrors the shipped proven-visible sonar
+# (Azimuth=120, RangeMin=1, RangeMax=40, MultiPath on) but at Hz=5 for a faster
+# closed-loop cadence. The paper's "forward" archetype is w_FOV=90; 120 is used to
+# match the proven-visible shipped config (a wider fan gives more robust wall
+# imaging in the harbor). Documented deviation; azimuth is configurable.
+#
+# Controller: ported LOS + kappa feed-forward + chi2-gate FSM. Gains chosen for the
+# harbor scale (large standoff, gentle approach). Dynamics = validated Fossen
+# baseline (control_scheme=1, manualControl, CL_delta=3.0, deltaMax 15deg).
+
+world: PierHarbor
+ticks_per_sec: 30
+duration_s: 240.0          # full trajectory (~4 min sim)
+smoke_duration_s: 30.0     # --smoke short verification run
+
+spawn_location: [486.0, -632.0, -12.0]
+spawn_rotation: [0.0, 0.0, 180.0]   # measured strong wall return (130k px, max intensity 0.77)
+
+frame_dump_every_s: 10.0   # dump a sonar intensity frame every 10 s for the figure
+
+sonar:
+  sensor_name: ForwardSonar
+  hz: 5
+  azimuth_deg: 120.0       # matches shipped proven-visible PierHarbor sonar
+  range_min: 1.0
+  range_max: 40.0
+  range_bins: 512
+  azimuth_bins: 256
+  intensity_thresh: 0.2    # wall-return intensity gate (tune in smoke if needed)
+
+controller:
+  d_star: 8.0              # standoff set-point [m]; near the harbor wall's natural
+                           # standoff at the spawn (~7.4 m, measured) so the demo
+                           # shows bounded fine-correction tracking (Lemma 1) rather
+                           # than one large back-away transient
+  d_min: 3.0               # collision margin [m]
+  u_max: 1.0               # plausible per-frame surge for the chi2 motion-gate [m/s]
+  thrust_rpm: 400.0        # constant surge command (RPM); ~gentle forward speed
+  Delta: 5.0               # LOS look-ahead [m]
+  K_p: 0.35                # LOS lateral-error gain [rad/s]
+  K_ff: 1.0                # curvature feed-forward gain (theory nominal)
+  K_theta: 0.3             # heading-misalignment gain
+  los_style: sin           # Caharija saturated sin-style
+  k_rudder: 8.0            # r* [rad/s] -> rudder deflection [rad] proportional gain
+  delta_max_deg: 15.0      # baseline fin envelope
+  window_L: 8              # curvature sliding-window (>=5 hard min)
+  s_bar: 0.5               # nominal arc-length spacing between sonar frames [m]
+  sigma_eta: 0.10          # measurement-noise std seed -> sigma_kappa (720 closed form)
+  u_min: 0.3               # lower surge bound for T*_N / T*_G [m/s]
+  kappa_dot_max: 1.0e-2    # assumed wall curvature-rate for T*_G [m^-2]
+  warmup_s: 2.0            # chi2 gate disabled for first 2 s
+
+acceptance:
+  min_valid_frame_frac: 0.05   # >0 required; harbor wall should give well above this

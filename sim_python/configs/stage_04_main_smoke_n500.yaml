@@ -1,0 +1,65 @@
+# Stage 04 — N=500 smoke MC.
+#
+# Purpose: validate the phenomena-check pipeline end-to-end before
+# committing to the longer main batch.  Five axes (vs nine), N=500,
+# M=1, T_end=60 s, seed=42.
+#
+# Wall-clock projection (16 cores, joblib n_jobs=8 to leave headroom):
+#   per-run ~ 60 s sim / 0.1 s dt ≈ 600 steps × ~0.5 ms = 0.3 s
+#   500 runs × 0.3 s / 8 workers ≈ 19 s.  Headroom for the FSM overhead.
+#
+# Five LHS axes (down from the full nine):
+#   - κ_max   : 0.01 – 1.0   m^-1  (log)
+#   - v_star  : 0.2  – 2.0   m/s   (linear)
+#   - f_s     : 0.5  – 20    Hz    (log)
+#   - tau_d   : 0.05 – 0.5   s     (linear)
+#   - w_FOV   : 0.52 – 6.28  rad   (linear; ≈ 30° – 360°)
+# σ_η fixed at 0.07 m (mid of [1, 50] cm); bar_Vc fixed at 0.1 m/s.
+# The five-dim slice exercises phenomena 1, 2, 3, 5 directly;
+# phenomena 4 + 6 use the (C1)/(C2) admissibility test which works on
+# this slice too.
+
+engine: py
+stage: 04
+run_tag: main_smoke_n500
+
+N: 500
+seed: 42
+
+axes:
+  kappa_max: [0.01, 1.0,   "log"]
+  v_star:    [0.2,  2.0,   "linear"]
+  f_s:       [0.5,  20.0,  "log"]
+  tau_d:     [0.05, 0.5,   "linear"]
+  w_FOV:     [0.52, 6.28,  "linear"]  # 30° – 360°
+
+fixed:
+  kappa_dot_max: 0.01     # m^-2 (geo-mean of [1e-3, 1e-1])
+  u_gate: 0.3             # m/s
+  sigma_eta: 0.07         # m (geo-mean of [0.01, 0.5])
+  bar_Vc: 0.1             # m/s
+
+sim:
+  T_end: 60.0             # s — shorter horizon for the smoke batch
+  dt: 0.1                 # s
+  d_star: 2.0             # m
+  d_min: 0.5              # m
+  side: L
+  ds: 0.1
+  noise_seed: 0           # global FSM/sensor RNG offset (M=1 → only seed)
+
+hull:
+  u_max: 2.0
+  r_max: 0.5
+  dot_r_max: 1.0
+  u_gate: 0.3
+  tau_u: 0.5
+  zeta_gate: 2.0
+
+los:
+  Delta: 2.0
+  K_p: 0.4
+  K_ff: 1.0
+  K_theta: 0.5
+  d_star: 2.0
+  style: sin

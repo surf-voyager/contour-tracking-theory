@@ -1,0 +1,72 @@
+# Stage 05b — Controlled scanning-sonar batch (paired with the forward batch)
+#
+# This batch isolates the effect of the field of view.  It is identical
+# to stage_05_forward_n2000.yaml in every respect except the FOV: it
+# uses the same seed (45 ⇒ identical LHS samples run-for-run), the same
+# f_s, the same σ_η(d) sensor model, and the same five swept axes —
+# changing ONLY w_FOV (π/2 → 2π).  Any scanning-vs-forward Lost-G
+# contrast observed here is therefore attributable to the field of view
+# alone.
+#
+# Expected: Lost-G ≈ 0 (geometric rigidity), because the Lost-G
+# predicate is a purely geometric test (closest-point bearing vs
+# w_FOV/2) and is independent of f_s and σ_η.
+#
+# Because the sensing parameters are held at the forward sonar's
+# (harsher: f_s=10 Hz, σ_η=0.05+0.01·d), a ~0 % Lost-G result here shows
+# that scanning rigidity is FOV-driven even under faster/noisier
+# sensing.
+
+engine: py
+stage: 05
+run_tag: scanning_ctrl_n2000
+seed: 45   # matches the forward batch ⇒ paired LHS samples (only w_FOV differs)
+
+N: 2000
+
+axes:
+  kappa_max:     [0.01,  1.0,  "log"]
+  kappa_dot_max: [1.0e-3, 1.0e-1, "log"]   # κ'_max swept for T*_G
+  v_star:        [0.2,   2.0,  "linear"]
+  tau_d:         [0.05,  0.5,  "linear"]
+  bar_Vc:        [0.0,   0.3,  "linear"]
+
+fixed:
+  # Scanning FOV — the SOLE difference from the forward batch
+  w_FOV: 6.2832       # 2π rad (360°)
+  # Sensing parameters held IDENTICAL to the forward batch
+  f_s: 10.0           # Hz — matched to forward (controlled)
+  sigma_eta_a: 0.05   # m  intercept of σ_η(d) — matched to forward
+  sigma_eta_b: 0.01   # slope of σ_η(d) [m / m] — matched to forward
+  # Misc
+  u_gate: 0.3
+  # legacy scalar sigma_eta evaluated at d_star: 0.05 + 0.01 * 2 = 0.070 m
+  sigma_eta: 0.070
+
+sim:
+  T_end: 120.0
+  dt: 0.1
+  d_star: 2.0
+  d_min: 0.5
+  side: L
+  ds: 0.1
+  noise_seed: 0   # driver overrides per noise realisation
+
+hull:
+  u_max: 2.0
+  r_max: 0.5
+  dot_r_max: 1.0
+  u_gate: 0.3
+  tau_u: 0.5
+  zeta_gate: 2.0
+
+los:
+  Delta: 2.0
+  K_p: 0.4
+  K_ff: 1.0
+  K_theta: 0.5
+  d_star: 2.0
+  style: sin
+
+# N=2000 × M=3 = 6000 runs total (driver loops noise_seed in {0,1,2}).
+M_realisations: 3

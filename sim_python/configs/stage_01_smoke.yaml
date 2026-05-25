@@ -1,0 +1,28 @@
+# Stage 01 smoke config — L0 torpedo kinematic 2D.
+# Pure-kinematic abstraction with rudder gate.
+
+engine: py
+stage: stage_01_skeleton
+batch: stage_01_smoke
+description: |
+  10 s straight run (u_cmd=1.0, r_cmd=0.0) + 10 s constant turn
+  (u_cmd=1.0, r_cmd=0.3) — exercises both branches of the rudder-gate
+  switch (u > u_gate throughout, so the gate is open) and the
+  rate-limited yaw-rate ramp.
+
+hull:
+  u_max: 2.0           # [m/s]
+  r_max: 0.5           # [rad/s]
+  dot_r_max: 1.0       # [rad/s^2]
+  u_gate: 0.3          # [m/s]
+  tau_u: 0.5           # [s]  — surge first-order time constant
+  zeta_gate: 2.0       # [s^-1] — yaw damping when u < u_gate
+
+sim:
+  t_end: 20.0          # [s]
+  dt: 0.01             # [s]   ⇒ 2001 trajectory samples
+  initial_state: [0.0, 0.0, 0.0, 0.0, 0.0]   # [x, y, psi, u, r]
+
+control_sequence:
+  - {t_0: 0.0,  t_1: 10.0, u_cmd: 1.0, r_cmd: 0.0}
+  - {t_0: 10.0, t_1: 20.0, u_cmd: 1.0, r_cmd: 0.3}

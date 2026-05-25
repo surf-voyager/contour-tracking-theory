@@ -1,0 +1,74 @@
+# sim_holoocean/configs/stage_03b_armA_forward60.yaml
+# Arm A — forward NARROW FOV, geometric-occlusion contrast.
+#
+# Goal: at a sharp convex corner of the PierHarbor structure, the wall tangent
+# rotates OUT of the narrow forward fan -> the visibility predicate vis_t -> 0 ->
+# the FSM enters Lost-G -> the controller coasts -> the wall re-enters the FOV ->
+# re-acquire returns to Tracking. This demonstrates the guaranteed-loss /
+# re-acquire behavior of the controller.
+#
+# Why a narrow fan triggers this where a 120-deg fan does not:
+#   - At the convex turn near (486, 614) the nearest-wall bearing reaches about
+#     -24 deg when the AUV falls behind the wall at higher standoff. A 120-deg fan
+#     (+/-60 deg edge) never loses that. Narrowing to a 50-deg fan (+/-25 deg edge)
+#     puts that excursion clearly outside the FOV.
+#   - The gains below also blunt the turn-in so the AUV lags harder into the convex
+#     corner, swinging the wall bearing further out of the fan.
+# Same VALIDATED sonar-visible spawn [486,-632,-12] as the PierHarbor demo (wall
+# imaged throughout).
+#
+# arm: A selects the forward-FOV visibility path in the driver.
+
+arm: A
+world: PierHarbor
+ticks_per_sec: 30
+duration_s: 120.0          # long enough to traverse >=1 full convex corner
+smoke_duration_s: 90.0
+
+spawn_location: [486.0, -632.0, -12.0]
+spawn_rotation: [0.0, 0.0, 180.0]
+
+frame_dump_every_s: 6.0
+
+sonar:
+  sensor_name: ForwardSonar
+  hz: 5
+  # The orbit reaches a wall bearing of about +/-29 deg at the convex corner. A
+  # 50-deg fan (+/-25 deg edge) is therefore just narrow enough that those corner
+  # excursions leave the FOV -> no in-FOV return -> vis_t -> 0 -> Lost-G. This is
+  # still a "narrow forward FOV" archetype.
+  azimuth_deg: 50.0        # +/-25 deg FOV edge
+  range_min: 1.0
+  range_max: 40.0
+  range_bins: 512
+  azimuth_bins: 256
+  intensity_thresh: 0.2
+
+controller:
+  # Uses the proven orbiting dynamics (thrust ~450, d* 8 -> a stable ~0.58 m/s orbit
+  # that reaches about -24 deg wall bearing at the convex corner), but with the gains
+  # tuned to blunt the turn-in so the AUV LAGS harder into the convex corner and the
+  # bearing swings out of the narrow fan -> vis_t -> 0 -> Lost-G:
+  #   K_ff 0 (no curvature feed-forward anticipation -> reactive-only, lags at
+  #   corners), K_theta 0 (don't actively null the bearing), larger Delta (slower
+  #   LOS), smaller k_rudder (less rudder authority).
+  d_star: 8.0
+  d_min: 3.0
+  u_max: 1.0
+  thrust_rpm: 450.0
+  Delta: 8.0
+  K_p: 0.30
+  K_ff: 0.0               # NO curvature anticipation -> reactive turn-in (lags at corner)
+  K_theta: 0.0           # don't actively null bearing -> bearing free to swing out
+  los_style: sin
+  k_rudder: 4.0          # reduced rudder authority -> slower turn-in -> more lag
+  delta_max_deg: 15.0
+  window_L: 8
+  s_bar: 0.5
+  sigma_eta: 0.10
+  u_min: 0.3
+  kappa_dot_max: 1.0e-2
+  warmup_s: 2.0
+
+acceptance:
+  min_valid_frame_frac: 0.05

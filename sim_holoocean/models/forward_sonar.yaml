@@ -1,0 +1,35 @@
+# sim_holoocean/models/forward_sonar.yaml
+# Layer-2 (HoloOcean 2.3.0) "forward imaging sonar" archetype.
+#
+# Paper parameters (Sensing — forward imaging sonar):
+#   f_s = 10 Hz, w_FOV = 90 deg (1.5708 rad), sigma_eta(d) = 0.05 + 0.01*d (m),
+#   R_FOV = 30 m, beam_count = 256.
+#
+# ── MAPPING (forward -> HoloOcean ImagingSonar) ──────────────────────────────
+# HoloOcean ImagingSonar is a forward-looking multibeam imaging sonar with a
+# configurable azimuth FOV (`Azimuth`, in degrees). It maps DIRECTLY onto the
+# "forward" archetype: we set Azimuth=90 to match w_FOV=90 deg, AzimuthBins=256 to
+# match beam_count=256, and RangeMax >= R_FOV. This is a clean 1:1 mapping (unlike
+# the scanning archetype, which has no 360-deg analog). Returns a
+# (RangeBins x AzimuthBins) intensity image; range is extracted as the
+# peak-intensity range bin (see static_target_smoke.py).
+#
+# ── NOISE MAPPING (sigma_eta -> HoloOcean) ───────────────────────────────────
+# Same rationale as scanning_sonar.yaml. HoloOcean `RangeSigma` is a single
+# range-independent additive-range-noise std. We seed it at the paper value at the
+# mid test distance d=5 m: sigma_eta(5) = 0.05 + 0.01*5 = 0.10 m. The range-fidelity
+# check then measures the empirical std at d in {2,5,10} m for comparison.
+
+sensor_type: ImagingSonar
+socket: SonarSocket
+Hz: 10                   # paper f_s (forward) = 10 Hz
+configuration:
+  RangeMin: 0.1          # m (ImagingSonar default lower bound)
+  RangeMax: 40.0         # m; matches shipped OpenWater-HoveringImagingSonar (>= R_FOV 30 m)
+  RangeBins: 512         # range resolution = (40-0.1)/512 ~= 0.078 m/bin
+  Azimuth: 90            # paper w_FOV (forward) = 90 deg  (DIRECT match)
+  AzimuthBins: 256       # paper beam_count = 256          (DIRECT match)
+  Elevation: 20          # ImagingSonar default elevation fan (deg)
+  InitOctreeRange: 50    # match shipped scenario; build octree beyond RangeMax at startup
+  RangeSigma: 0.10       # sigma_eta(d=5 m) seed = 0.05 + 0.01*5 (range-independent in HO)
+  ShowWarning: false     # headless: suppress on-screen sonar-compute warning

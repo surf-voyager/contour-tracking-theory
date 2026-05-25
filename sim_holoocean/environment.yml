@@ -1,0 +1,21 @@
+name: holoocean
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - pandas
+  - pyarrow
+  - pyyaml
+  - pip
+  - pip:
+      - holoocean==2.3.0
+# Layer-2 reproducibility pin:
+#   HoloOcean 2.3.0, Python 3.10, Ocean world package.
+# holoocean ships on PyPI (pip), not conda-forge; numeric stack from conda-forge.
+# numpy/scipy/pandas/pyarrow left unpinned to defer to holoocean 2.3.0's own
+# constraints. HoloOcean must run on a machine with the engine + world packages
+# installed (GPU-rendered); the scenarios cannot render headless without it.
+# Update via:  conda env update -n holoocean -f sim_holoocean/environment.yml

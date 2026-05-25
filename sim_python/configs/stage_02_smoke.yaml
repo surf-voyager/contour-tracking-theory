@@ -1,0 +1,49 @@
+# Stage 02 closed-loop smoke configuration.
+#
+# Two scenarios:
+#   - straight: 80 m straight wall, initial offset 1 m above standoff
+#   - circle:   R=10 m arc, 2/3 of full turn (≈ 41.9 m of arc)
+#
+# Both share the same hull and LOS configs.
+# The git commit hash, LHS seed, and engine label "py" are recorded in
+# the driver-written summary.json for reproducibility.
+
+engine: py
+stage: 02
+run_tag: closed_loop_smoke
+dt: 0.02
+
+hull:
+  u_max: 2.0
+  r_max: 0.5
+  dot_r_max: 1.0
+  u_gate: 0.3
+  tau_u: 0.5
+  zeta_gate: 2.0
+
+los:
+  Delta: 2.0
+  K_p: 0.4
+  K_ff: 1.0
+  K_theta: 0.5       # heading damping required to avoid limit-cycle
+  d_star: 2.0
+  style: sin
+
+scenarios:
+  - name: straight
+    type: straight
+    length: 80.0
+    side: L
+    ds: 0.05
+    initial_state: [0.0, 3.0, 0.0, 1.0, 0.0]   # x, y, ψ, u, r
+    t_end: 25.0
+    u_cmd: 1.0
+  - name: circle
+    type: arc
+    radius: 10.0
+    arc_length: 41.8879           # 4πR/3
+    side: L
+    ds: 0.05
+    initial_state: [0.0, 2.0, 0.0, 1.0, 0.0]
+    t_end: 25.0
+    u_cmd: 1.0
