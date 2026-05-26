@@ -331,7 +331,7 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="HoloOcean Stage-02 static-target sonar smoke")
+    parser = argparse.ArgumentParser(description="HoloOcean static-target sonar range-fidelity check")
     parser.add_argument("--config", default="sim_holoocean/configs/stage_02_smoke.yaml")
     parser.add_argument("--out-dir", default="sim_holoocean/results/stage_02_smoke")
     args = parser.parse_args(argv)

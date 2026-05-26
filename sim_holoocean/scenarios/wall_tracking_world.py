@@ -4,19 +4,17 @@ Builds a HoloOcean `scenario_cfg` dict for the closed-loop contour-tracking demo
 Key facts (taken from the shipped PierHarbor scenarios):
 
   * The shipped `PierHarbor-Torpedo` and `PierHarbor-HoveringImagingSonar` scenarios
-    BOTH spawn `auv0` at location [486.0, -632.0, -12.0]. The HoveringImagingSonar
-    variant points an ImagingSonar (Azimuth=120, RangeMin=1, RangeMax=40) at the
-    harbor wall from there — i.e. this spawn is a KNOWN sonar-visible pose near a
-    real static wall (unlike the empty OpenWater world, this gives strong wall
-    returns).
+    spawn `auv0` near the harbor wall; the HoveringImagingSonar variant points an
+    ImagingSonar (Azimuth=120, RangeMin=1, RangeMax=40) at the wall from there — a
+    sonar-visible pose near a real static wall (unlike the empty OpenWater world,
+    this gives strong wall returns).
   * The shipped Torpedo variant uses rotation yaw=130 deg; the sonar variant uses
-    yaw=180. We expose `rotation` so the driver can orient the forward sonar fan at
-    the wall.
+    yaw=180. We expose `rotation` so the driver can orient the sonar fan at the wall.
 
-We MERGE: the validated baseline TorpedoAUV body (Fossen `torpedo` dynamics,
+We merge the validated baseline TorpedoAUV body (Fossen `torpedo` dynamics,
 control_scheme=1, manualControl, CL_delta=3.0, deltaMax 15 deg, r_bg/r_bb from
-models/torpedo_config.yaml) + a forward ImagingSonar on SonarSocket + PoseSensor +
-DynamicsSensor (DynamicsSensor is REQUIRED by FossenInterface.update()).
+models/torpedo_config.yaml) with a forward ImagingSonar on SonarSocket + PoseSensor +
+DynamicsSensor (DynamicsSensor is required by FossenInterface.update()).
 
 This module is layer-isolated: it imports nothing from sim_python.
 """
@@ -24,15 +22,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-# Validated sonar-visible spawn from the shipped PierHarbor scenarios.
+# Sonar-visible spawn from the shipped PierHarbor scenarios.
 PIERHARBOR_WALL_SPAWN = [486.0, -632.0, -12.0]
 PACKAGE = "Ocean"
 AGENT_NAME = "auv0"
 AGENT_TYPE = "TorpedoAUV"
 
-# Baseline dynamics + actuator (the validated REMUS-100-class torpedo baseline;
-# mirrored in models/torpedo_config.yaml). Re-stated here so the scenario is
-# self-contained (no YAML round-trip needed inside the driver).
+# Baseline dynamics + actuator (mirrored in models/torpedo_config.yaml). Re-stated
+# here so the scenario is self-contained (no YAML round-trip inside the driver).
 BASELINE_DYNAMICS = {"r_bg": [0.0, 0.0, 0.0], "r_bb": [0.0, 0.0, -0.04]}
 BASELINE_ACTUATOR = {"CL_delta": 3.0, "deltaMax_fin_deg": 15}
 
@@ -51,15 +48,22 @@ def forward_sonar_sensor(
     mult_sigma: float = 0.2,
     range_sigma: float = 0.1,
     multipath: bool = True,
+    mount_yaw_deg: float = 0.0,
 ) -> dict:
-    """Forward ImagingSonar sensor dict.
+    """Forward/side-looking ImagingSonar sensor dict.
 
     Defaults mirror the shipped `PierHarbor-HoveringImagingSonar` sonar (the
     proven-visible config) so the wall images reliably; azimuth/range are
     overridable from the YAML config. Hz default 5 (vs shipped 1) gives a faster
     measurement cadence for the closed loop while staying a factor of ticks_per_sec.
+
+    ``mount_yaw_deg`` rotates the sonar about the agent's z (yaw) relative to the
+    SonarSocket. For wall-FOLLOWING a long straight wall, the controller's LOS law
+    needs the LATERAL distance to the wall, so the sonar must point at the wall
+    (to starboard): set mount_yaw_deg=-90. A forward-pointing fan (0) only grazes
+    a parallel side-wall and cannot measure standoff (geometric blind spot).
     """
-    return {
+    d = {
         "sensor_type": "ImagingSonar",
         "sensor_name": sensor_name,
         "socket": "SonarSocket",
@@ -81,6 +85,12 @@ def forward_sonar_sensor(
             "ShowWarning": False,
         },
     }
+    if mount_yaw_deg != 0.0:
+        # persistent sensor rotation relative to SonarSocket (environments.py spawns
+        # sensors with socket/location/rotation); yaw the fan toward the wall.
+        d["location"] = [0.0, 0.0, 0.0]
+        d["rotation"] = [0.0, 0.0, float(mount_yaw_deg)]
+    return d
 
 
 def mss_sonar_sensor(
@@ -97,7 +107,7 @@ def mss_sonar_sensor(
     range_sigma: float = 0.1,
     multipath: bool = True,
 ) -> dict:
-    """MSS single-beam ImagingSonar sensor dict (scanning arm, 360 deg).
+    """MSS single-beam ImagingSonar sensor dict (the scanning arm, 360 deg).
 
     A NARROW-fan (Azimuth ~2 deg, AzimuthBins=1) ImagingSonar that is steered each
     frame via sensor.rotate(scan_rotation(angle)) to reconstruct a full 360 deg
@@ -138,6 +148,9 @@ def build_tracking_scenario(
     laser_max_distance: float = 50.0,
     include_mss: bool = False,
     mss_kwargs: Optional[dict] = None,
+    include_lidar: bool = False,
+    lidar_range: float = 40.0,
+    lidar_channels: int = 64,
 ) -> dict:
     """Return a HoloOcean scenario_cfg dict for the closed-loop tracking demo.
 
@@ -188,6 +201,27 @@ def build_tracking_scenario(
                 "LaserAngle": 0,
             },
         })
+    if include_lidar:
+        # Ground-truth geometry: RaycastSemanticLidar ray-traces the static octree
+        # (same geometry the sonar uses) -> true 3D point cloud + per-point object id
+        # and semantic tag, immune to the water fog. Mounted at the agent origin (no
+        # socket) and paired with Location/RotationSensor for a clean local->world
+        # transform; returns (N,7): [x,y,z (sensor frame), cos_inc, ring, obj_id, tag].
+        sensors.append({
+            "sensor_type": "RaycastSemanticLidar",
+            "sensor_name": "SemLidar",
+            "configuration": {
+                "Channels": int(lidar_channels),
+                "Range": float(lidar_range),
+                "PointsPerSecond": 200000,
+                "RotationFrequency": int(ticks_per_sec),  # = tps -> full 360 scan/tick
+                "HorizontalFov": 360.0,
+                "UpperFovLimit": 10,
+                "LowerFovLimit": -30,
+            },
+        })
+        sensors.append({"sensor_type": "LocationSensor"})
+        sensors.append({"sensor_type": "RotationSensor"})
 
     agent = {
         "agent_name": AGENT_NAME,
@@ -202,13 +236,15 @@ def build_tracking_scenario(
         "rotation": list(rotation),
     }
     return {
-        "name": "stage_03_wall_tracking",
+        "name": "wall_tracking",
         "package_name": PACKAGE,
         "world": world,
         "main_agent": AGENT_NAME,
         "ticks_per_sec": int(ticks_per_sec),
         "frames_per_sec": False,
-        "octree_min": 0.02,
+        # 10 cm octree leaves: ample for m-scale standoff tracking, and far fewer
+        # nodes than the 2 cm default in this dense vertical-wall region.
+        "octree_min": 0.1,
         "octree_max": 5.0,
         "agents": [agent],
     }

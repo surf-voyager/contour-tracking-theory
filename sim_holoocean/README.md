@@ -63,9 +63,14 @@ PYTHONPATH=. python -m sim_holoocean.scenarios.empty_world
 PYTHONPATH=. python -m sim_holoocean.scenarios.static_target_smoke \
     --config sim_holoocean/configs/stage_02_smoke.yaml
 
-# Closed-loop contour tracking in PierHarbor (full demo).
+# Closed-loop contour tracking in PierHarbor (full demo). --lidar additionally logs
+# a RaycastSemanticLidar ground-truth geometry scan, used as the true standoff.
 PYTHONPATH=. python -m sim_holoocean.mc.run_tracking \
-    --config sim_holoocean/configs/stage_03_pierharbor.yaml
+    --config sim_holoocean/configs/stage_03_pierharbor.yaml --lidar
+
+# Score a tracking run against the LiDAR ground truth (standoff RMS, min, losses):
+PYTHONPATH=. python -m sim_holoocean.mc.tracking_eval \
+    sim_holoocean/results/wall_tracking
 
 # Dual-sonar contrast — narrow forward fan (loses the wall at a convex corner):
 PYTHONPATH=. python -m sim_holoocean.mc.run_tracking \
@@ -93,7 +98,9 @@ sim_holoocean/
 ├─ models/                    torpedo hull config + forward / scanning / MSS sonar
 ├─ configs/                   per-scenario YAML run configs
 ├─ controllers/              ported LOS + curvature + FSM + re-acquire controllers
-├─ mc/                        closed-loop tracking driver
+├─ mc/                        closed-loop tracking driver + LiDAR-truth evaluator
+│   ├─ run_tracking.py        closed-loop contour-tracking driver (--lidar for truth)
+│   └─ tracking_eval.py       score a run vs LiDAR ground truth (RMS / min / losses)
 ├─ results/                   per-run parquet / npz / summary output
 └─ logs/                      run logs
 ```

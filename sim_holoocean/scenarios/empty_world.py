@@ -30,7 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-# --- Built-in Ocean-package scenario for the smoke (probed: ships with Ocean) ---
+# --- Built-in Ocean-package scenario for the smoke (ships with the Ocean package) ---
 # SimpleUnderwater-Hovering is the simplest fully-defined Ocean scenario:
 # one HoveringAUV (auv0) with PoseSensor/DepthSensor/etc, no sonar plugin needed.
 DEFAULT_SCENARIO = "SimpleUnderwater-Hovering"
@@ -135,7 +135,7 @@ def _write_parquet(path: Path, scenario: str, gpu: str, version: str,
                    pose_samples: list[float]) -> bool:
     """Write a tiny parquet via pyarrow; return True on success.
 
-    On ImportError (pyarrow not installed in the remote env) print a [WARN]
+    On ImportError (pyarrow not installed) print a [WARN]
     and return False rather than aborting the whole smoke.
     """
     try:
@@ -181,7 +181,7 @@ def _write_csv(path: Path, scenario: str, gpu: str, version: str,
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="HoloOcean Stage-01 remote smoke")
+    parser = argparse.ArgumentParser(description="HoloOcean hello-world smoke test")
     parser.add_argument("--scenario", default=DEFAULT_SCENARIO,
                        help=f"Ocean-package scenario name (default: {DEFAULT_SCENARIO})")
     parser.add_argument("--ticks", type=int, default=DEFAULT_TICKS,

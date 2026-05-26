@@ -1,8 +1,8 @@
-"""Closed-loop contour-tracking driver (runs on a machine with the HoloOcean engine).
+"""Closed-loop contour-tracking driver.
 
-Demonstrates the contour-tracking controller (sim_holoocean.controllers) running
-CLOSED-LOOP in HoloOcean's PierHarbor world, with a forward ImagingSonar imaging a
-REAL static harbor wall.
+Demonstrates the Layer-1 contour-tracking controller (ported into
+sim_holoocean.controllers) running CLOSED-LOOP in HoloOcean's PierHarbor world,
+with a forward ImagingSonar imaging a REAL static harbor wall.
 
 PIPELINE PER TICK
 -----------------
@@ -19,7 +19,7 @@ PIPELINE PER TICK
   7. FossenInterface.update -> world-frame accel -> env.act -> env.tick
 
 When the sonar returns no wall this frame (visibility=0), we hold the last
-hat_kappa feed-forward and let the FSM run its guaranteed-loss dwell, exactly as the
+hat_kappa feed-forward and let the FSM run its Lost-G dwell, exactly as the
 theory prescribes.
 
 OUTPUTS (schema parity with the Layer-1 output + engine="ho")
@@ -28,20 +28,20 @@ OUTPUTS (schema parity with the Layer-1 output + engine="ho")
                       reacq_time, collide_flag, terminate_reason, engine  (+ Layer-2
                       diagnostics: d_err, valid_frame, laser_gt, x, y, yaw)
   sonar_frames.npz:   periodic (RangeBins x AzimuthBins) intensity snapshots + meta
-                      for the manuscript figure and re-rendering.
+                      for the paper figure.
 
 API NOTES
 ---------
   * Control loop: FossenInterface([name], scenario); set_u_control([r_fin, top_fin,
     left_fin, bottom_fin, thrust_rpm]); loop accel=fossen.update(name,state) ->
-    env.act(name,accel) -> state=env.tick().
+    env.act(name,accel) -> state=env.tick(). (validated pattern.)
   * Fin order = [right(0), top(1), left(2), bottom(3), thrust(4)]; fin angles RAD.
     Pure yaw-left torque: bottom(3)=+delta, top(1)=-delta, horizontal fins 0.
   * convert_NWU_to_NED(dyn) -> eta=[x,y,z,roll,pitch,yaw], nu=[u,v,w,p,q,r] (NED body).
   * ImagingSonar value = float32 (RangeBins, AzimuthBins) intensity image; azimuth
     bin j bearing = -Az/2 + (j+0.5)/AzimuthBins * Az (deg), centred on fwd axis.
 
-This module is layer-isolated: it imports nothing from sim_python.
+Layer isolation: imports nothing from sim_python.
 """
 from __future__ import annotations
 
@@ -77,6 +77,7 @@ def extract_wall(
     azimuth_deg: float,
     intensity_thresh: float,
     min_az_bins: int = 2,
+    center_az_window: float | None = None,
 ):
     """Extract (d, theta, valid, n_az_hit) from a sonar intensity image.
 
@@ -106,15 +107,145 @@ def extract_wall(
             b = int(hits[0])  # nearest (smallest range bin) above threshold
             nearest_range[j] = range_min + (b + 0.5) / n_range * (range_max - range_min)
     valid_mask = np.isfinite(nearest_range)
+    if center_az_window is not None:
+        # side-looking: the wall is on the sonar axis (bearing ~0); restrict to the
+        # central window so the standoff is the axial lateral distance, not an
+        # off-axis fan-edge return (which is nearer in slant range but not the wall).
+        bearings_all = -azimuth_deg / 2.0 + (np.arange(n_az) + 0.5) / n_az * azimuth_deg
+        valid_mask &= np.abs(bearings_all) <= center_az_window
     n_az_hit = int(valid_mask.sum())
     if n_az_hit < min_az_bins:
         return float("nan"), float("nan"), False, n_az_hit
-    j_near = int(np.nanargmin(nearest_range))
+    j_near = int(np.argmin(np.where(valid_mask, nearest_range, np.inf)))
     d = float(nearest_range[j_near])
     # bearing of azimuth bin j: span [-Az/2, +Az/2], bin centre.
     bearing_deg = -azimuth_deg / 2.0 + (j_near + 0.5) / n_az * azimuth_deg
     theta = float(np.deg2rad(bearing_deg))
     return d, theta, True, n_az_hit
+
+
+def extract_wall_line(image, range_min, range_max, azimuth_deg, intensity_thresh,
+                      min_pts: int = 12):
+    """Lateral standoff from a LINE FIT to the wall returns (robust to heading offset).
+
+    The single-beam nearest range hits a fan-edge artifact, and a fixed center window
+    fails once the heading drifts (it then reads an off-axis far point, which positively
+    feeds back into the loop). Instead, collect the nearest return per azimuth bin as
+    Cartesian points in the sonar frame, fit a line by PCA (total least squares), and
+    return the PERPENDICULAR distance from the sonar origin to that line as the lateral
+    standoff d -- geometrically the true wall standoff regardless of small misalignment.
+    theta = wall-line tilt from the across-track axis (heading misalignment proxy).
+    Validated vs LiDAR truth on tracking frames (10.02 vs 10.11 m).
+    """
+    if image is None:
+        return float("nan"), float("nan"), False, 0
+    img = np.asarray(image, dtype=np.float64)
+    if img.ndim != 2 or img.size == 0:
+        return float("nan"), float("nan"), False, 0
+    n_range, n_az = img.shape
+    xs, ys = [], []
+    for j in range(n_az):
+        hits = np.nonzero(img[:, j] > intensity_thresh)[0]
+        if hits.size:
+            r = range_min + (int(hits[0]) + 0.5) / n_range * (range_max - range_min)
+            b = np.deg2rad(-azimuth_deg / 2.0 + (j + 0.5) / n_az * azimuth_deg)
+            xs.append(r * np.cos(b))
+            ys.append(r * np.sin(b))
+    if len(xs) < min_pts:
+        return float("nan"), float("nan"), False, len(xs)
+    P = np.column_stack([xs, ys])
+    c = P.mean(axis=0)
+    _, _, vt = np.linalg.svd(P - c, full_matrices=False)
+    direction, normal = vt[0], vt[1]
+    d = float(abs(c @ normal))                       # perpendicular distance to the line
+    if direction[1] < 0.0:
+        direction = -direction          # consistent orientation along the across-track axis
+    theta = float(np.arctan2(direction[0], direction[1]))  # 0 when wall parallel (no misalign)
+    return d, theta, True, len(xs)
+
+
+def _rot_zyx_deg(roll_deg: float, pitch_deg: float, yaw_deg: float) -> np.ndarray:
+    """World rotation R = Rz(yaw) Ry(pitch) Rx(roll) from RotationSensor (deg)."""
+    r, p, yw = np.deg2rad([roll_deg, pitch_deg, yaw_deg])
+    cz, sz, cy, sy, cx, sx = (np.cos(yw), np.sin(yw), np.cos(p), np.sin(p),
+                              np.cos(r), np.sin(r))
+    Rz = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]])
+    Ry = np.array([[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]])
+    Rx = np.array([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]])
+    return Rz @ Ry @ Rx
+
+
+def lidar_true_standoff(sl, loc, rotw, dz_band: float = 1.5):
+    """True nearest-wall standoff at the AUV's own depth, from a SemLidar scan.
+
+    The forward ImagingSonar collapses elevation into its 2-D image, so the
+    sonar-reported standoff cannot serve as ground truth. RaycastSemanticLidar
+    ray-traces the SAME static octree the sonar sees but returns true 3-D geometry,
+    so it is the performance reference: transform the scan to world, keep only
+    points within +/- dz_band of the AUV's own depth (the contour SLICE the AUV
+    tracks at constant z -- this also rejects the seabed directly below), and
+    report the nearest such point's HORIZONTAL distance from the AUV.
+
+    Returns
+    -------
+    d_true : float       nearest in-band wall distance [m] (nan if none).
+    bearing_rel : float  bearing of that point relative to AUV heading [rad],
+                         + = to the LEFT (matches extract_wall's theta sign).
+    z_true : float       world z of that nearest point [m] (nan if none).
+    tag : float          semantic tag of that point (nan if absent).
+    n_band : int         number of in-band points.
+    """
+    if sl is None or loc is None or rotw is None:
+        return float("nan"), float("nan"), float("nan"), float("nan"), 0
+    pts = np.asarray(sl, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[0] == 0 or pts.shape[1] < 3:
+        return float("nan"), float("nan"), float("nan"), float("nan"), 0
+    loc = np.asarray(loc, dtype=np.float64).ravel()[:3]
+    rpy = np.asarray(rotw, dtype=np.float64).ravel()[:3]
+    world = (_rot_zyx_deg(rpy[0], rpy[1], rpy[2]) @ pts[:, :3].T).T + loc
+    in_band = np.abs(world[:, 2] - loc[2]) <= dz_band
+    if not np.any(in_band):
+        return float("nan"), float("nan"), float("nan"), float("nan"), 0
+    wb = world[in_band]
+    mp = pts[in_band]
+    dxy = wb[:, :2] - loc[:2]
+    dist = np.hypot(dxy[:, 0], dxy[:, 1])
+    k = int(np.argmin(dist))
+    world_brg = float(np.arctan2(dxy[k, 1], dxy[k, 0]))
+    bearing_rel = (world_brg - np.deg2rad(rpy[2]) + np.pi) % (2 * np.pi) - np.pi
+    tag = float(mp[k, -1]) if mp.shape[1] >= 7 else float("nan")
+    return float(dist[k]), float(bearing_rel), float(wb[k, 2]), tag, int(wb.shape[0])
+
+
+def lidar_wall_line(sl, dz_band: float = 1.5, min_pts: int = 12):
+    """Clean lateral standoff + heading misalignment from a LINE FIT to the LiDAR
+    depth-slice points (body frame).
+
+    Used as the CONTROL measurement (option B): the side ImagingSonar's 2-D image
+    collapses elevation and its single-side standoff estimate is fragile to heading
+    drift, so the closed loop is driven instead by the RaycastSemanticLidar geometry
+    (the sonar is still logged for comparison). Take the in-depth-band returns in the
+    sensor/body frame (x fwd, y left), fit a line by PCA, and return the perpendicular
+    distance from the AUV (origin) to that line as the lateral standoff d, plus the
+    line's tilt from the fore-aft axis as the heading misalignment theta (0 = parallel).
+    """
+    if sl is None:
+        return float("nan"), float("nan"), False, 0
+    pts = np.asarray(sl, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[0] == 0 or pts.shape[1] < 3:
+        return float("nan"), float("nan"), False, 0
+    band = np.abs(pts[:, 2]) <= dz_band            # sensor z ~ AUV depth slice
+    P = pts[band, :2]                               # body (x fwd, y left)
+    if P.shape[0] < min_pts:
+        return float("nan"), float("nan"), False, int(P.shape[0])
+    c = P.mean(axis=0)
+    _, _, vt = np.linalg.svd(P - c, full_matrices=False)
+    direction, normal = vt[0], vt[1]
+    d = float(abs(c @ normal))                      # perpendicular standoff
+    if direction[0] < 0.0:
+        direction = -direction                      # orient along +fore-aft
+    theta = float(np.arctan2(direction[1], direction[0]))  # 0 when wall parallel
+    return d, theta, True, int(P.shape[0])
 
 
 def beam_has_return(beam_1d, intensity_thresh: float) -> bool:
@@ -134,9 +265,8 @@ def mss_sweep_visibility(polar_buffer, intensity_thresh: float):
     polar_buffer is (RangeBins x AngleBins). An angle bin "sees" the wall if any of
     its range bins exceeds the intensity threshold. vis_t (arm B) is True iff >= 1
     angle bin in the swept circle holds a return — i.e. the wall is somewhere in the
-    360 deg coverage (geometric rigidity: a full-circle FOV is never geometrically
-    occluded by a finite-curvature wall, so the 360-degree scanning sonar keeps the
-    wall visible on every sweep).
+    360 deg coverage (geometric rigidity: a full-circle FOV is never
+    geometrically occluded by a finite-curvature wall).
     """
     buf = np.asarray(polar_buffer, dtype=np.float64)
     if buf.ndim != 2 or buf.size == 0:
@@ -154,8 +284,8 @@ def mss_sweep_visibility(polar_buffer, intensity_thresh: float):
 def r_star_to_fins(r_star: float, k_rudder: float, delta_max_rad: float):
     """Map commanded yaw rate r* [rad/s] to the 4-fin deflection vector (rad).
 
-    Proportional rudder law delta = clip(k_rudder * r*, +/- delta_max). Sign
-    convention for a yaw-LEFT turn (r* > 0 => turn toward +yaw in NED):
+    Proportional rudder law delta = clip(k_rudder * r*, +/- delta_max). Validated
+    sign convention for a yaw-LEFT turn (r* > 0 => turn toward +yaw in NED):
         bottom(3) = +delta,  top(1) = -delta,  horizontal fins(0,2) = 0.
     Returns [right, top, left, bottom] fin angles in radians.
     """
@@ -186,7 +316,8 @@ def config_hash(cfg: dict) -> str:
 
 
 def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
-                 arm: str = "A") -> int:
+                 arm: str = "A", gui: bool = False,
+                 seconds: float | None = None, capture_lidar: bool = False) -> int:
     import holoocean
     from holoocean.fossen_dynamics import FossenInterface
     from holoocean.fossen_dynamics.helper_functions import convert_NWU_to_NED
@@ -194,9 +325,9 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
     print(f"HoloOcean version: {holoocean.__version__}", flush=True)
     cfg = _load_yaml(cfg_path)
 
-    # Dual-sonar arm. A = forward narrow FOV (geometric occlusion at the corner ->
-    # guaranteed-loss episode). B = MSS 360 deg scanning (vis_t never drops; control
-    # is driven by the same forward channel, but vis_t is computed from the 360 deg
+    # Dual-sonar arm. A = forward narrow FOV (geometric occlusion at the
+    # corner -> Lost-G). B = MSS 360 deg scanning (vis_t never drops; control driven
+    # by the same forward channel for budget, but vis_t is computed from the 360 deg
     # MSS coverage to show the visibility contrast). cfg["arm"] overrides default.
     arm = str(cfg.get("arm", arm)).upper()
     use_mss = (arm == "B")
@@ -207,6 +338,8 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
     ticks_per_sec = int(cfg.get("ticks_per_sec", 30))
     duration_s = float(cfg.get("smoke_duration_s", 30.0) if smoke
                        else cfg.get("duration_s", 240.0))
+    if seconds is not None:        # CLI override (e.g. a long GUI run for manual capture)
+        duration_s = float(seconds)
     sonar_cfg = cfg.get("sonar", {})
     sonar_name = sonar_cfg.get("sensor_name", "ForwardSonar")
     sonar_hz = int(sonar_cfg.get("hz", 5))
@@ -216,10 +349,27 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
     range_bins = int(sonar_cfg.get("range_bins", 512))
     az_bins = int(sonar_cfg.get("azimuth_bins", 256))
     intensity_thresh = float(sonar_cfg.get("intensity_thresh", 0.2))
+    # Side-looking mount: yaw the sonar toward the wall so extract_wall's range is
+    # the LATERAL standoff the LOS law expects. -90 = starboard. With a side-looking
+    # sonar the measured bearing is relative to the sonar axis (= heading + mount),
+    # i.e. theta_sonar ~ -(heading misalignment); flip its sign for the LOS theta.
+    sonar_mount_yaw = float(sonar_cfg.get("mount_yaw_deg", 0.0))
+    theta_sign = -1.0 if sonar_mount_yaw != 0.0 else 1.0
+    # InitOctreeRange: octrees within this range of the agent are built at startup.
+    # A small range (e.g. 20 m) keeps the startup octree build bounded in this
+    # wall-dense region.
+    sonar_init_octree = float(sonar_cfg.get("init_octree_range", 50.0))
+    _caw = sonar_cfg.get("center_az_window_deg", None)
+    sonar_center_window = float(_caw) if _caw is not None else None
+    use_line_fit = bool(sonar_cfg.get("use_line_fit", False))  # robust lateral d
 
     ctl = cfg.get("controller", {})
     d_star = float(ctl.get("d_star", 8.0))
     d_min = float(ctl.get("d_min", 2.0))
+    lidar_band_z = float(ctl.get("lidar_band_z", 1.5))  # depth slice for LiDAR truth
+    use_lidar_control = bool(ctl.get("use_lidar_control", False))  # opt B: drive LOS by LiDAR
+    wall_side = str(ctl.get("wall_side", "L")).upper()   # L: wall to port (LOS default)
+    side_sign = -1.0 if wall_side == "R" else 1.0         # R: mirror the lateral law
     v_star_rpm = float(ctl.get("thrust_rpm", 400.0))
     Delta = float(ctl.get("Delta", 4.0))
     K_p = float(ctl.get("K_p", 0.4))
@@ -257,9 +407,13 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
             "sensor_name": sonar_name, "hz": sonar_hz, "azimuth_deg": az_deg,
             "range_min": range_min, "range_max": range_max,
             "range_bins": range_bins, "azimuth_bins": az_bins,
+            "mount_yaw_deg": sonar_mount_yaw,
+            "init_octree_range": sonar_init_octree,
         },
         include_laser=True,
         laser_max_distance=range_max,
+        include_lidar=capture_lidar,
+        lidar_range=range_max,
         include_mss=use_mss,
         mss_kwargs={
             "sensor_name": mss_name, "hz": mss_hz, "range_min": range_min,
@@ -292,14 +446,15 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
     print(f"[fsm] sigma_kappa={sigma_kappa:.3e} T*_N={fsm.T_star_N:.2f}s "
           f"T*_G={fsm.T_star_G:.2f}s chi2_thr={fsm.chi2_threshold_value:.3f}", flush=True)
 
-    # chi2 gate innovation: the gate detects MEASUREMENT anomalies (sonar dropout /
-    # sudden wall jumps), NOT steady-state standoff tracking error (that is the LOS
-    # controller's job). So the innovation is the frame-to-frame change in the wall
-    # distance, d_now - d_pred, where d_pred is the previous sonar distance (the wall
-    # is smooth so it should not jump between frames). S sizes the plausible
-    # per-frame change: measurement noise + the max geometric change ~ u_max *
-    # dt_frame. (Using the residual against d* instead would make the gate fire
-    # permanently whenever d != d*.)
+    # chi2 gate innovation: the gate detects MEASUREMENT
+    # anomalies (sonar dropout / sudden wall jumps), NOT steady-state standoff
+    # tracking error (that is the LOS controller's job). So the innovation is the
+    # frame-to-frame change in the wall distance, d_now - d_pred, where d_pred is the
+    # previous sonar distance (the wall is smooth so it should not jump between
+    # frames). S sizes the plausible per-frame change: measurement noise + the max
+    # geometric change ~ u_max * dt_frame. (Using residual against d* instead, as a
+    # naive first cut, made the gate fire permanently whenever d != d* — the smoke-2
+    # finding.)
     dt_frame = 1.0 / max(sonar_hz, 1)
     chi2_motion_std = float(ctl.get("u_max", 1.0)) * dt_frame  # plausible Δd per frame
     S_d = np.array([[max(sigma_eta, 1e-3) ** 2 + chi2_motion_std ** 2]])
@@ -312,6 +467,7 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
     rows: list[dict] = []
     sonar_frames: list[np.ndarray] = []
     frame_meta: list[dict] = []
+    lidar_scans: list[dict] = []   # ground-truth geometry scans (--lidar)
 
     lost_count = 0
     reacq_time = 0.0
@@ -353,7 +509,7 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
           f"n_ticks={n_ticks} sonar_every={sonar_every}tk "
           f"frame_dump_every={frame_dump_every}tk", flush=True)
 
-    with holoocean.make(scenario_cfg=scenario, show_viewport=False) as env:
+    with holoocean.make(scenario_cfg=scenario, show_viewport=gui) as env:
         fossen = FossenInterface([scenario["main_agent"]], scenario)
         fossen.set_u_control(scenario["main_agent"], u_control)
         # arm-B: steer the MSS beam to its start angle before the first frame
@@ -379,12 +535,21 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
             u_surge = float(nu[0])
             r_yaw = float(nu[5])
 
+            # GUI pose readout (once/sec): HoloOcean world (NWU) = (x, -y, -z) of
+            # the logged NED pose -- this is the form spawn_location uses (at t~0 it
+            # should read ~the configured spawn, e.g. [486, -632, -12]). Use a value
+            # printed beside a pier as a new spawn_location.
+            if gui and tick % ticks_per_sec == 0:
+                print(f"[pose] t={t_sim:5.1f}s  NED(x,y,z,yaw)="
+                      f"({x:7.1f},{y:7.1f},{z:6.1f},{np.degrees(yaw):+6.1f} deg)  "
+                      f"world_spawn(x,y,z)=[{x:.1f}, {-y:.1f}, {-z:.1f}]", flush=True)
+
             # ---- sonar measurement ----
             # The ImagingSonar publishes its frame only on its own scheduled ticks
             # (Hz=5 => every 6th tick at 30 tps), and the phase is offset from tick 0
             # by the settle ticks. So we DETECT a fresh frame by the sensor key being
-            # PRESENT in the state dict, not by a tick-phase predicate (a tick-phase
-            # predicate can fail to align and yield 0 valid frames).
+            # PRESENT in the state dict, not by a tick-phase predicate (the latter was
+            # the smoke-1 bug: phase never aligned -> 0 valid frames).
             img = state.get(sonar_name) if isinstance(state, dict) else None
             is_sonar_frame = img is not None
             d = last_d
@@ -392,8 +557,13 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
             valid = False
             d_innov = None  # frame-to-frame standoff change (chi2 innovation)
             if is_sonar_frame:
-                d_meas, theta_meas, valid, n_hit = extract_wall(
-                    img, range_min, range_max, az_deg, intensity_thresh)
+                if use_line_fit:
+                    d_meas, theta_meas, valid, n_hit = extract_wall_line(
+                        img, range_min, range_max, az_deg, intensity_thresh)
+                else:
+                    d_meas, theta_meas, valid, n_hit = extract_wall(
+                        img, range_min, range_max, az_deg, intensity_thresh,
+                        center_az_window=sonar_center_window)
                 sonar_frame_count += 1
                 if valid:
                     valid_frame_count += 1
@@ -403,7 +573,7 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
                     d, theta = d_meas, theta_meas
                     last_d, last_theta = d, theta
                     last_kappa = curv.update(d)
-                # periodic frame dump for the figure / re-rendering
+                # periodic frame dump for the figure
                 if (t_sim - last_dump_t) >= frame_dump_every_s - 1e-6:
                     last_dump_t = t_sim
                     sonar_frames.append(np.asarray(img, dtype=np.float32))
@@ -411,22 +581,49 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
                         "t": t_sim, "x": x, "y": y, "yaw": yaw, "d": d,
                         "valid": bool(valid), "n_az_hit": int(n_hit),
                     })
+                    if capture_lidar:
+                        sl = state.get("SemLidar") if isinstance(state, dict) else None
+                        loc = state.get("LocationSensor") if isinstance(state, dict) else None
+                        rotw = state.get("RotationSensor") if isinstance(state, dict) else None
+                        if sl is not None and loc is not None and rotw is not None:
+                            lidar_scans.append({
+                                "t": float(t_sim),
+                                "pts": np.asarray(sl, dtype=np.float32),       # (N,7) sensor frame
+                                "loc": np.asarray(loc, dtype=np.float32).ravel(),   # world xyz
+                                "rot": np.asarray(rotw, dtype=np.float32).ravel(),  # world rpy deg
+                            })
 
             hat_kappa = last_kappa
 
-            # laser ground-truth cross-check (Stage-02-confirmed reliable channel)
+            # laser ground-truth cross-check (reliable range channel)
             las = state.get("Laser") if isinstance(state, dict) else None
             laser_gt = float(np.asarray(las).ravel()[0]) if las is not None else float("nan")
             if not (laser_gt > 0):
                 laser_gt = float("nan")
 
+            # ---- LiDAR ground-truth standoff (performance reference) ----
+            # Every tick (SemLidar completes a full scan per tick): the true nearest
+            # wall point in the AUV's own depth slice. This is the honest standoff
+            # against which the sonar-driven control is scored; the sonar's d is what
+            # the controller acts on, d_true_lidar is what actually happened.
+            d_true_lidar = theta_true_lidar = z_true_lidar = tag_true_lidar = float("nan")
+            d_lidar_ctrl = theta_lidar_ctrl = float("nan")  # clean control measurement (opt B)
+            if capture_lidar:
+                sl_t = state.get("SemLidar") if isinstance(state, dict) else None
+                loc_t = state.get("LocationSensor") if isinstance(state, dict) else None
+                rot_t = state.get("RotationSensor") if isinstance(state, dict) else None
+                d_true_lidar, theta_true_lidar, z_true_lidar, tag_true_lidar, _ = \
+                    lidar_true_standoff(sl_t, loc_t, rot_t, dz_band=lidar_band_z)
+                if use_lidar_control:
+                    d_lidar_ctrl, theta_lidar_ctrl, _vl, _nl = \
+                        lidar_wall_line(sl_t, dz_band=lidar_band_z)
+
             # ---- arm-B: MSS 360 deg sweep + visibility ----
             # Steer the single beam, accumulate the polar map, and recompute the
             # 360 deg visibility predicate over the most-recent FULL sweep. The MSS is
-            # NOT the control sensor here (the forward channel drives the loop, so both
-            # arms fly the identical trajectory); we log vis_mss to demonstrate that
-            # the full-circle FOV never loses the wall (geometric rigidity: the
-            # 360-degree scanning sonar keeps the wall visible on every sweep).
+            # NOT the control sensor here (forward channel drives the loop, documented
+            # budget simplification); we log vis_mss to demonstrate that the full-circle
+            # FOV never loses the wall (geometric rigidity).
             mss_is_frame = False
             mss_beam_hit = None
             vis_t = None
@@ -498,14 +695,31 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
             prev_mode = mode
 
             # ---- guidance: LOS + kappa feed-forward ----
-            d_for_los = d if np.isfinite(d) else d_star
-            theta_for_los = theta if np.isfinite(theta) else 0.0
+            if use_lidar_control:
+                # option B: drive the loop with the clean LiDAR NEAREST-wall standoff
+                # (accurate: 10.1 vs 9.9 m truth; the line-fit perpendicular distance
+                # carried a +2 m bias, and the side sonar standoff is fragile to heading
+                # drift -- both are logged for comparison only). Pure lateral-distance LOS.
+                d_for_los = d_true_lidar if np.isfinite(d_true_lidar) else d_star
+                # pure lateral-distance LOS (theta=0). The LiDAR wall-line direction is too
+                # noisy for K_theta damping; bounded tracking holds over ~T*_N, with a slow
+                # under-damped drift beyond it (documented limitation, not a divergence bug).
+                theta_for_los = 0.0
+            else:
+                d_for_los = d if np.isfinite(d) else d_star
+                # line-fit theta is already the geometric heading misalignment; the
+                # center-window theta is sonar-axis-relative and needs the mount sign flip.
+                theta_for_los = (theta if use_line_fit else theta_sign * theta) \
+                    if np.isfinite(theta) else 0.0
             r_star = compute_r_star(d=d_for_los, theta=theta_for_los,
                                     kappa_hat=hat_kappa, u=max(u_surge, 0.05),
                                     cfg=los_cfg)
+            # wall to starboard: the LOS law assumes the wall to PORT (side=L), so the
+            # lateral correction is mirrored for side=R (los_controller convention).
+            r_star *= side_sign
             # in Lost / Reacquire, bias a gentle search turn toward the wall side
             if mode in (Mode.L_G, Mode.R):
-                r_star += 0.15  # gentle turn-toward-wall during search
+                r_star += 0.15 * side_sign  # gentle turn-toward-wall during search
 
             fins = r_star_to_fins(r_star, k_rudder, delta_max_rad)
             u_control[:4] = fins
@@ -514,14 +728,15 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
 
             # collision check
             d_err = abs(d - d_star) if np.isfinite(d) else float("nan")
-            if np.isfinite(d) and d <= d_min:
+            # collision on the true standoff when driving by LiDAR (the sonar d is unreliable)
+            d_collide = d_true_lidar if (use_lidar_control and np.isfinite(d_true_lidar)) else d
+            if np.isfinite(d_collide) and d_collide <= d_min:
                 collide_flag = 1
 
             # vis_t timeline: the visibility predicate actually fed to the FSM this
             # tick (held between sonar frames). Arm A: forward-FOV visibility. Arm B:
             # MSS 360 deg coverage. wall_bearing_deg = forward nearest-wall bearing
-            # (in arm A this exceeds +/- Az/2 at the guaranteed-loss episode, i.e. the
-            # wall tangent has rotated out of the forward fan).
+            # (in arm A this should exceed +/- Az/2 at the Lost-G episode).
             vis_t_log = bool(held_visibility)
             wall_bearing_deg = float(np.rad2deg(theta)) if np.isfinite(theta) else float("nan")
             rows.append({
@@ -538,7 +753,7 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
                 "collide_flag": int(collide_flag),
                 "terminate_reason": terminate_reason,
                 "engine": "ho",
-                # Layer-2 diagnostics (beyond the shared core schema)
+                # Layer-2 diagnostics (beyond the core schema)
                 "d_err": float(d_err) if np.isfinite(d_err) else float("nan"),
                 "valid_frame": bool(valid),
                 "vis_t": vis_t_log,
@@ -547,7 +762,13 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
                 "mss_beam_hit": bool(mss_beam_hit) if mss_beam_hit is not None else False,
                 "r_star_cmd": float(r_star),
                 "laser_gt": float(laser_gt),
-                "x": x, "y": y, "yaw": yaw,
+                "x": x, "y": y, "z": float(z), "yaw": yaw,
+                "pitch_deg": float(np.rad2deg(eta[4])),
+                # LiDAR ground-truth standoff (performance reference, --lidar only)
+                "d_true_lidar": float(d_true_lidar),
+                "theta_true_lidar": float(theta_true_lidar),
+                "z_true_lidar": float(z_true_lidar),
+                "tag_true_lidar": float(tag_true_lidar),
             })
 
             # ---- advance sim ----
@@ -617,6 +838,16 @@ def run_tracking(cfg_path: Path, out_dir: Path, smoke: bool = False,
             range_bins=range_bins, azimuth_bins=az_bins,
         )
         print(f"Sonar frames saved: {npz_path} ({len(sonar_frames)} frames)", flush=True)
+    if lidar_scans:
+        lpath = run_dir / "lidar_scans.npz"
+        np.savez_compressed(
+            lpath,
+            pts=np.array([s["pts"] for s in lidar_scans], dtype=object),
+            loc=np.stack([s["loc"] for s in lidar_scans], axis=0),
+            rot=np.stack([s["rot"] for s in lidar_scans], axis=0),
+            t=np.array([s["t"] for s in lidar_scans], dtype=np.float32),
+        )
+        print(f"LiDAR scans saved: {lpath} ({len(lidar_scans)} scans)", flush=True)
 
     summary = {
         "config_hash": chash, "arm": arm, "world": world, "duration_s": duration_s,
@@ -671,19 +902,31 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Stage-03 closed-loop wall tracking")
+    parser = argparse.ArgumentParser(description="closed-loop wall tracking")
     parser.add_argument("--config", default="sim_holoocean/configs/stage_03_pierharbor.yaml")
-    parser.add_argument("--out-dir", default="sim_holoocean/results/stage_03_tracking")
+    parser.add_argument("--out-dir", default="sim_holoocean/results/wall_tracking")
     parser.add_argument("--smoke", action="store_true",
                         help="short run (smoke_duration_s) verifying sonar+loop")
     parser.add_argument("--arm", default="A", choices=["A", "B"],
                         help="dual-sonar arm: A=forward narrow FOV "
                              "(geometric occlusion -> Lost-G), B=MSS 360deg scanning "
                              "(vis_t never drops). cfg['arm'] overrides.")
+    parser.add_argument("--gui", action="store_true",
+                        help="open the HoloOcean viewport (show_viewport=True) so the "
+                             "spectator camera can be flown to a bird's-eye angle and "
+                             "screenshotted manually. Requires a display on the host.")
+    parser.add_argument("--seconds", type=float, default=None,
+                        help="override run duration [s] (e.g. --seconds 600 to keep the "
+                             "GUI open long enough to frame and capture a shot).")
+    parser.add_argument("--lidar", action="store_true",
+                        help="also capture a RaycastSemanticLidar ground-truth geometry "
+                             "scan at each frame-dump (-> lidar_scans.npz) for a true-wall "
+                             "3D tracking figure.")
     args = parser.parse_args(argv)
     try:
         return run_tracking(Path(args.config), Path(args.out_dir), smoke=args.smoke,
-                            arm=args.arm)
+                            arm=args.arm, gui=args.gui, seconds=args.seconds,
+                            capture_lidar=args.lidar)
     except Exception as exc:  # noqa: BLE001
         import traceback
 

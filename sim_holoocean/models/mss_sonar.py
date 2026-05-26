@@ -175,7 +175,7 @@ class MSSPolarMap:
         self.buffer.fill(0)
 
 
-# ── convenience wrapper for headless closed-loop use (Stage 03) ──────────────
+# ── convenience wrapper for headless closed-loop use ─────────────────────────
 
 class MSSScanner:
     """Combines controller + polar map + per-frame update for headless MC use.

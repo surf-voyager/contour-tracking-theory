@@ -1,56 +1,71 @@
 # sim_holoocean/configs/stage_03_pierharbor.yaml
-# Closed-loop contour-tracking demo config.
+# Closed-loop contour-tracking demo config (PierHarbor).
 #
-# World + spawn: PierHarbor at the VALIDATED sonar-visible spawn [486,-632,-12]
-# (shipped PierHarbor-{Torpedo,HoveringImagingSonar} both spawn auv0 here; the
-# HoveringImagingSonar variant shows an ImagingSonar at this pose imaging a real
-# harbor wall — strong wall returns, unlike the empty OpenWater world). yaw 150 deg
-# orients the forward sonar fan at the wall (between shipped Torpedo yaw=130 and
-# Sonar yaw=180).
+# World + spawn: PierHarbor, beside a near-vertical pier caisson so the
+# side-looking sonar images the wall's vertical face. The spawn places the AUV
+# ~10 m off the west face of a 12 x 86 m caisson (near-vertical, slope ~86 deg,
+# near-straight, ~17 m tall) heading +y (yaw 90, NWU) so the wall is to starboard.
 #
-# Sonar: forward ImagingSonar, config mirrors the shipped proven-visible sonar
-# (Azimuth=120, RangeMin=1, RangeMax=40, MultiPath on) but at Hz=5 for a faster
-# closed-loop cadence. The paper's "forward" archetype is w_FOV=90; 120 is used to
-# match the proven-visible shipped config (a wider fan gives more robust wall
-# imaging in the harbor). Documented deviation; azimuth is configurable.
+# Sonar: forward ImagingSonar (Azimuth=120, RangeMin=1, RangeMax=25, MultiPath on)
+# at Hz=5 for a fast closed-loop cadence, mounted side-looking (mount_yaw_deg=-90)
+# so the measured range is the lateral standoff the LOS law needs.
 #
-# Controller: ported LOS + kappa feed-forward + chi2-gate FSM. Gains chosen for the
-# harbor scale (large standoff, gentle approach). Dynamics = validated Fossen
-# baseline (control_scheme=1, manualControl, CL_delta=3.0, deltaMax 15deg).
+# Controller: ported Layer-1 LOS + curvature feed-forward + chi2-gate FSM, with
+# gains for the harbor scale. Dynamics = validated Fossen baseline (control_scheme=1,
+# manualControl, CL_delta=3.0, deltaMax 15 deg).
 
 world: PierHarbor
 ticks_per_sec: 30
-duration_s: 240.0          # full trajectory (~4 min sim)
+duration_s: 80.0           # ~48 m along the wall; covers T*_G + steady state
 smoke_duration_s: 30.0     # --smoke short verification run
 
-spawn_location: [486.0, -632.0, -12.0]
-spawn_rotation: [0.0, 0.0, 180.0]   # measured strong wall return (130k px, max intensity 0.77)
+# Spawn ~10 m off the west face of the pier caisson (depth slice z=-12), heading
+# +y (yaw 90, NWU) so the wall is to starboard (+x); the controller's wall_side=R
+# mirrors the LOS lateral law accordingly.
+spawn_location: [440.8, -708.0, -12.0]
+spawn_rotation: [0.0, 0.0, 90.0]
 
 frame_dump_every_s: 10.0   # dump a sonar intensity frame every 10 s for the figure
 
 sonar:
   sensor_name: ForwardSonar
   hz: 5
-  azimuth_deg: 120.0       # matches shipped proven-visible PierHarbor sonar
+  azimuth_deg: 120.0       # wide fan for robust wall imaging in the harbor
   range_min: 1.0
-  range_max: 40.0
+  range_max: 25.0
   range_bins: 512
   azimuth_bins: 256
-  intensity_thresh: 0.2    # wall-return intensity gate (tune in smoke if needed)
+  intensity_thresh: 0.2    # wall-return intensity gate
+  mount_yaw_deg: -90.0     # SIDE-LOOKING to STARBOARD (-90): the wall is to starboard;
+                           # the fan points at it so the measured range IS the lateral
+                           # standoff the LOS law needs. Forward (0) only grazes a side-wall.
+  init_octree_range: 20.0  # bound the startup octree build in this wall-dense region
+  center_az_window_deg: 25.0  # (used only when use_line_fit=false)
+  use_line_fit: true       # robust lateral standoff = perpendicular distance to a PCA line
+                           # fit of the wall returns; immune to heading drift
 
 controller:
-  d_star: 8.0              # standoff set-point [m]; near the harbor wall's natural
-                           # standoff at the spawn (~7.4 m, measured) so the demo
-                           # shows bounded fine-correction tracking (Lemma 1) rather
-                           # than one large back-away transient
-  d_min: 3.0               # collision margin [m]
+  d_star: 10.0             # standoff set-point [m]; the wall's natural standoff, so the
+                           # demo shows bounded fine-correction tracking (Lemma 1). The
+                           # wall is straight (kappa~0 << kappa^crit~0.13/m).
+  d_min: 4.0               # collision margin [m]
+  use_lidar_control: true  # drive the LOS loop with the clean LiDAR line-fit geometry
+                           # (the side-sonar standoff is fragile to heading drift; sonar is
+                           # still logged for the comparison panel). LiDAR ray-traces the
+                           # same wall the sonar images -- it is just a clean range channel.
+  lidar_band_z: 1.5        # +/- depth slice [m] for the LiDAR true-standoff reference
+                           # (--lidar): nearest true wall point within this band of the
+                           # AUV's own z = the contour slice it tracks; rejects the seabed
   u_max: 1.0               # plausible per-frame surge for the chi2 motion-gate [m/s]
-  thrust_rpm: 400.0        # constant surge command (RPM); ~gentle forward speed
-  Delta: 5.0               # LOS look-ahead [m]
-  K_p: 0.35                # LOS lateral-error gain [rad/s]
-  K_ff: 1.0                # curvature feed-forward gain (theory nominal)
-  K_theta: 0.3             # heading-misalignment gain
-  los_style: sin           # Caharija saturated sin-style
+  thrust_rpm: 400.0        # constant surge command (RPM); gentle forward speed
+  Delta: 2.0               # LOS look-ahead [m] -- aligned with Layer-1 (same controller)
+  K_p: 0.4                 # LOS lateral-error gain [rad/s] -- aligned with Layer-1
+  K_ff: 0.0                # OFF: the wall is straight (kappa~0) so feed-forward adds
+                           # nothing here. Re-enable for curved walls.
+  K_theta: 0.0             # pure lateral-distance LOS; with the accurate nearest-point d,
+                           # the K_theta=0 loop holds bounded tracking over ~T*_N.
+  wall_side: R             # mirror so e>0 (too far) -> turn toward the starboard wall
+  los_style: sin           # saturated sin-style LOS
   k_rudder: 8.0            # r* [rad/s] -> rudder deflection [rad] proportional gain
   delta_max_deg: 15.0      # baseline fin envelope
   window_L: 8              # curvature sliding-window (>=5 hard min)
@@ -61,4 +76,4 @@ controller:
   warmup_s: 2.0            # chi2 gate disabled for first 2 s
 
 acceptance:
-  min_valid_frame_frac: 0.05   # >0 required; harbor wall should give well above this
+  min_valid_frame_frac: 0.05   # >0 required; the harbor wall should give well above this
